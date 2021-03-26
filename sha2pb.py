@@ -85,7 +85,7 @@ class CNFBits(object):
 
     def print(self, *args, **kwargs):
         if self.outputFile:
-            kwargs.file = self.outputFile
+            kwargs["file"] = self.outputFile
             print(*args, **kwargs)
             if len(args) > 0 and args[-1][-1] == "0":
                 self.nConstraints += 1
@@ -298,7 +298,7 @@ class PBBits(object):
 
     def print(self, *args, **kwargs):
         if self.outputFile:
-            kwargs.file = self.outputFile
+            kwargs["file"] = self.outputFile
             print(*args, **kwargs)
             if len(args) > 0 and args[-1][-1] == ";":
                 self.nConstraints += 1
@@ -389,6 +389,15 @@ class PBBits(object):
 
         variables = list(args)
         variables.append(res)
+
+        # for variables in zip(*variables):
+        #     for values in itertools.product([0,1], repeat = len(args)):
+        #         values = list(values)
+        #         values.append((sum(values) + 1) % 2)
+
+        #         for sign, var in zip(values, variables):
+        #             self.print("1 %s%s "%("~" if sign else "", var), end = "")
+        #         self.print(">= 1 ;")
 
         for variables in zip(*variables):
             for var in variables:
@@ -543,20 +552,20 @@ def join(h):
     return result
 
 def readSolution(solutionFile):
-    line = solutionFile.readline()[:-1]
-
-    lits = line.split(" ")[1:]
     values = dict()
-    for i, lit in enumerate(lits):
-        value = True
-        if lit[0] == "-":
-            value = False
-            var = lit[1:]
-        else:
-            var = lit
+    for line in solutionFile:
+        words = line.strip().split(" ")
+        if words[0] == "v":
+            for i, lit in enumerate(words[1:]):
+                value = True
+                if lit[0] == "-":
+                    value = False
+                    var = lit[1:]
+                else:
+                    var = lit
 
-        assert(var == "x%i"%(i + 1))
-        values[var] = value
+                assert(var == "x%i"%(i + 1))
+                values[var] = value
 
     return values
 
@@ -565,12 +574,11 @@ def readSolutionCnf(solutionFile):
     for line in solutionFile:
         words = line.strip().split(" ")
         if words[0] == "v":
-            for lit in words:
+            for lit in words[1:]:
                 lit = int(lit)
                 if lit == 0:
                     continue
-                values[str(abs(lit))] == (True if lit > 0 else False)
-    print(values)
+                values[str(abs(lit))] = (True if lit > 0 else False)
     return values
 
 
@@ -584,7 +592,7 @@ def main():
     solutionParser = subparsers.add_parser("solution")
     solutionParser.add_argument("solutionFile", type=argparse.FileType("rt"),
         default = "sol.txt")
-    solutionParser.add_argument("outputPreImage", type=argparse.FileType("wt"),
+    solutionParser.add_argument("outputPreImage", type=argparse.FileType("wb"),
         default = "result_file.txt",
         nargs = "?")
 
@@ -665,7 +673,6 @@ def main():
         inBits  = bt.getInBits()
         outs = process(bt)
 
-        print(inBits)
         indata = 0
         for bit in inBits:
             indata <<= 1
@@ -676,8 +683,12 @@ def main():
         assert(message_length % 8 == 0)
         inbytes = (indata >> (nBits - message_length)).to_bytes(message_length // 8, byteorder = 'big')
 
-        with open("sha1_in.txt", "wb") as f:
-            f.write(inbytes)
+        if args.outputPreImage:
+            args.outputPreImage.write(inbytes)
+
+        outBits = list()
+        for o in outs:
+            outBits.extend(o)
 
         result = 0
         nZero = 0
