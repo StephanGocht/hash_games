@@ -61,37 +61,21 @@ class TrueBits(object):
     def constant(self, value, nBits):
         return value
 
-class CNFBits(object):
-    def __init__(self, outputFile, num_chunks):
+class Formula(object):
+    def __init__(self, outputFile):
         self.outputFile = outputFile
-        self.num_chunks = num_chunks
         self.maxVar = 0
+        self.format = format
         self.nConstraints = 0
-        self.inputVars = None
-
-        # reserve space for header
-        self.print(" " * 100)
-
-    def getInBits(self):
-        if self.inputVars is None:
-            self.inputVars = self.newVars(512 * self.num_chunks)
-        return self.inputVars
-
-    def writeHeader(self):
-        pos = self.outputFile.tell()
-        self.outputFile.seek(0)
-        self.print("p cnf %i %i" % (self.maxVar, self.nConstraints), end = "")
-        self.outputFile.seek(pos)
-
-    def print(self, *args, **kwargs):
-        if self.outputFile:
-            kwargs["file"] = self.outputFile
-            print(*args, **kwargs)
-            if len(args) > 0 and args[-1][-1] == "0":
-                self.nConstraints += 1
 
     def var(self, i):
-        return "%i"%(i)
+        raise NotImplementedError()
+
+    def _isEnd(self, char):
+        raise NotImplementedError()
+
+    def _header(self):
+        raise NotImplementedError()
 
     def newVar(self):
         self.maxVar += 1
@@ -104,6 +88,63 @@ class CNFBits(object):
             result.append(self.newVar())
 
         return result
+
+
+    def print(self, *args, **kwargs):
+        if self.outputFile:
+            kwargs["file"] = self.outputFile
+            print(*args, **kwargs)
+
+            if len(args) > 0 and len(args[-1]) > 0 and self._isEnd(args[-1][-1]):
+                self.nConstraints += 1
+
+    def writeHeader(self):
+        pos = self.outputFile.tell()
+        self.outputFile.seek(0)
+        self._header()
+        self.outputFile.seek(pos)
+
+
+class OPBFormula(Formula):
+    def var(self, i):
+        return "x%i"%(i)
+
+    def _isEnd(self, char):
+        return char == ";"
+
+    def _header(self):
+        self.print("* #variable= %i #constraint= %i" % (self.maxVar, self.nConstraints), end = "")
+
+class CNFFormula(Formula):
+    def var(self, i):
+        return "%i"%(i)
+
+    def _isEnd(self, char):
+        return char == ";"
+
+    def _header(self):
+        self.print("p cnf %i %i" % (self.maxVar, self.nConstraints), end = "")
+
+
+class CNFBits(object):
+    def __init__(self, formula, num_chunks):
+        self.inputVars = None
+        self.num_chunks = num_chunks
+        self.formula = formula
+
+        # reserve space for header
+        self.print(" " * 100)
+
+    def newVars(self, n):
+        return self.formula.newVars(n)
+
+    def print(self, *args, **kwargs):
+        self.formula.print(*args,**kwargs)
+
+    def getInBits(self):
+        if self.inputVars is None:
+            self.inputVars = self.newVars(512 * self.num_chunks)
+        return self.inputVars
 
     def blocks(self):
         bits = self.getInBits()
@@ -275,48 +316,24 @@ class CNFBits(object):
 
 
 class PBBits(object):
-    def __init__(self, outputFile, num_chunks):
-        self.outputFile = outputFile
+    def __init__(self, formula, num_chunks):
         self.num_chunks = num_chunks
-        self.maxVar = 0
-        self.nConstraints = 0
         self.inputVars = None
+        self.formula = formula
 
         # reserve space for header
         self.print(" " * 100)
+
+    def newVars(self, n):
+        return self.formula.newVars(n)
+
+    def print(self, *args, **kwargs):
+        self.formula.print(*args,**kwargs)
 
     def getInBits(self):
         if self.inputVars is None:
             self.inputVars = self.newVars(512 * self.num_chunks)
         return self.inputVars
-
-    def writeHeader(self):
-        pos = self.outputFile.tell()
-        self.outputFile.seek(0)
-        self.print("* #variable= %i #constraint= %i" % (self.maxVar, self.nConstraints), end = "")
-        self.outputFile.seek(pos)
-
-    def print(self, *args, **kwargs):
-        if self.outputFile:
-            kwargs["file"] = self.outputFile
-            print(*args, **kwargs)
-            if len(args) > 0 and args[-1][-1] == ";":
-                self.nConstraints += 1
-
-    def var(self, i):
-        return "x%i"%(i)
-
-    def newVar(self):
-        self.maxVar += 1
-        return self.var(self.maxVar)
-
-    def newVars(self, n):
-        result = []
-
-        for i in range(n):
-            result.append(self.newVar())
-
-        return result
 
     def blocks(self):
         bits = self.getInBits()
@@ -628,10 +645,13 @@ def main():
         num_chunks = len(data) * 8 // 512
         print("number of chunks:", num_chunks)
 
+        formula = None
         if args.format == "cnf":
-            bt = CNFBits(args.outputFormula, num_chunks)
+            formula = CNFFormula(args.outputFormula)
+            bt = CNFBits(formula, num_chunks)
         elif args.format == "opb":
-            bt = PBBits(args.outputFormula, num_chunks)
+            formula = OPBFormula(args.outputFormula)
+            bt = PBBits(formula, num_chunks)
 
         inBits  = bt.getInBits()
         outs = process(bt)
@@ -642,7 +662,7 @@ def main():
         allBits = len(data) * 8
         forcedBits = allBits - msg_bytes * 8
         freeBits = allBits - forcedBits
-        freeBits = 0
+        freeBits = 10
         bits = allBits - freeBits
         assert(bits >= forcedBits)
 
@@ -650,10 +670,10 @@ def main():
         # bits += 512 - bits
         bt.setVars(int.from_bytes(data, byteorder = 'big'), inBits[-bits:])
 
-        outZeroBits = 0
+        outZeroBits = 4
         bt.setVars(0, outBits[:outZeroBits])
 
-        bt.writeHeader()
+        formula.writeHeader()
 
 
     if args.what == "solution":
@@ -666,9 +686,9 @@ def main():
         print("number of chunks:", num_chunks)
 
         if args.format == "cnf":
-            bt = CNFBits(None, num_chunks)
+            bt = CNFBits(CNFFormula(None), num_chunks)
         elif args.format == "opb":
-            bt = PBBits(None, num_chunks)
+            bt = PBBits(OPBFormula(None), num_chunks)
 
         inBits  = bt.getInBits()
         outs = process(bt)
