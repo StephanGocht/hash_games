@@ -221,9 +221,9 @@ class CNFBits(object):
         for i in range(nOut):
             addands.append(list())
 
-        for i in range(nBits):
-            for arg in args:
-                addands[i].append(arg[i])
+        for arg in args:
+            for i, var in enumerate(reversed(arg)):
+                addands[i].append(var)
 
         for i in range(nBits):
             added = self.halfAdder(*addands[i])
@@ -233,7 +233,7 @@ class CNFBits(object):
             for j, var in added[1:]:
                 addands[i + j].append(var)
 
-        return result
+        return list(reversed(result))
 
     def bitwise_mayority(self, b, c, d):
         nBits = len(b)
