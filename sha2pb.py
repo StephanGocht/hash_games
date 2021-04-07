@@ -12,22 +12,22 @@ class BitVec(object):
         pass
 
 
-def nextInt32(it):
+def nextInt32(it, byteorder):
     result = []
     for i in range(4):
         result.append(next(it))
-    return int.from_bytes(result, byteorder='big')
+    return int.from_bytes(result, byteorder=byteorder)
 
 class TrueBits(object):
     def __init__(self, data):
         self.data = iter(data)
 
-    def blocks(self):
+    def blocks(self, byteorder = 'big'):
         while True:
             w = []
             for i in range(16):
                 try:
-                    w.append(nextInt32(self.data))
+                    w.append(nextInt32(self.data, byteorder))
                 except StopIteration:
                     return
             yield w
@@ -37,6 +37,13 @@ class TrueBits(object):
         mask32bit = 0xFFFFFFFF
         return (n << value | n >> (32 - value)) & mask32bit
 
+    def rightrotate(self, n, value):
+        mask32bit = 0xFFFFFFFF
+        return (n >> value | n << (32 - value)) & mask32bit
+
+    def rightshift(self, n, value):
+        return n >> value
+
     def bitwise_if(self, b,c,d):
         return (b & c) | ((~b) & d)
 
@@ -45,6 +52,9 @@ class TrueBits(object):
         for i in args:
             result ^= i
         return result
+
+    def bitwise_md5_i(self, b, c, d):
+        return c ^ (b | ~d)
 
     def bitsum32(self, *args):
         mask32bit = 0xFFFFFFFF
@@ -161,6 +171,12 @@ class CNFBits(object):
 
     def leftrotate(self, n, value):
         return n[value:] + n[:value]
+
+    def rightrotate(self, n, value):
+        return n[:value] + n[value:]
+
+    def rightshift(self, n, value):
+        return ([self.zero] * value) + n[:value]
 
     def bitwise_if(self, b, c, d):
         # (b & c) | ((~b) & d)
@@ -324,6 +340,8 @@ class PBBits(object):
         # reserve space for header
         self.print(" " * 100)
 
+        self.zero = self.constant(0,1)
+
     def newVars(self, n):
         return self.formula.newVars(n)
 
@@ -350,6 +368,12 @@ class PBBits(object):
 
     def leftrotate(self, n, value):
         return n[value:] + n[:value]
+
+    def rightrotate(self, n, value):
+        return n[:value] + n[value:]
+
+    def rightshift(self, n, value):
+        return ([self.zero] * value) + n[:value]
 
     def bitwise_if(self, b, c, d):
         # (b & c) | ((~b) & d)
@@ -485,7 +509,76 @@ class PBBits(object):
             # self.print("1 %s%s >= 1 ;"%("" if val else "~", var))
             self.print("1 %s = %i ;"%(var, 1 if val else 0))
 
-def process(bt):
+def sha256(bt):
+
+    k = [
+        0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b,
+        0x59f111f1, 0x923f82a4, 0xab1c5ed5, 0xd807aa98, 0x12835b01,
+        0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7,
+        0xc19bf174, 0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc,
+        0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da, 0x983e5152,
+        0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147,
+        0x06ca6351, 0x14292967, 0x27b70a85, 0x2e1b2138, 0x4d2c6dfc,
+        0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85,
+        0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3, 0xd192e819,
+        0xd6990624, 0xf40e3585, 0x106aa070, 0x19a4c116, 0x1e376c08,
+        0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f,
+        0x682e6ff3, 0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208,
+        0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2 ]
+    k = [bt.constant(x, 32) for x in k]
+
+    s = [
+        0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f,
+        0x9b05688c, 0x1f83d9ab, 0x5be0cd19 ]
+    s = [bt.constant(x, 32) for x in s]
+
+
+    for w in bt.blocks():
+        w = list(w)
+        for i in range(16, 64):
+            s0 = bt.bitwise_xor(bt.rightrotate(w[i-15],  7), bt.rightrotate(w[i-15], 18), bt.rightshift(w[i-15],  3))
+            s1 = bt.bitwise_xor(bt.rightrotate(w[i- 2], 17), bt.rightrotate(w[i- 2], 19), bt.rightshift(w[i- 2], 10))
+            w.append(bt.bitsum32(w[i-16], s0, w[i-7], s1))
+
+        a = s[0]
+        b = s[1]
+        c = s[2]
+        d = s[3]
+        e = s[4]
+        f = s[5]
+        g = s[6]
+        h = s[7]
+
+        for i in range(0, 64):
+            S1 = bt.bitwise_xor(bt.rightrotate(e, 6), bt.rightrotate(e, 11), bt.rightrotate(e, 25))
+            ch = bt.bitwise_if(e, f, g)
+            temp1 = bt.bitsum32(h, S1, ch, k[i], w[i])
+            S0 = bt.bitwise_xor(bt.rightrotate(a, 2), bt.rightrotate(a, 13), bt.rightrotate(a, 22))
+            maj = bt.bitwise_mayority(a, b, c)
+            temp2 = bt.bitsum32(S0, maj)
+
+            h = g
+            g = f
+            f = e
+            e = bt.bitsum32(d, temp1)
+            d = c
+            c = b
+            b = a
+            a = bt.bitsum32(temp1, temp2)
+
+        s[0] = bt.bitsum32(s[0], a)
+        s[1] = bt.bitsum32(s[1], b)
+        s[2] = bt.bitsum32(s[2], c)
+        s[3] = bt.bitsum32(s[3], d)
+        s[4] = bt.bitsum32(s[4], e)
+        s[5] = bt.bitsum32(s[5], f)
+        s[6] = bt.bitsum32(s[6], g)
+        s[7] = bt.bitsum32(s[7], h)
+
+    return s
+
+
+def sha1(bt):
     h = [
             bt.constant(0x67452301, 32),
             bt.constant(0xEFCDAB89, 32),
@@ -493,6 +586,13 @@ def process(bt):
             bt.constant(0x10325476, 32),
             bt.constant(0xC3D2E1F0, 32),
         ]
+
+    kall = [
+        bt.constant(0x5A827999, 32),
+        bt.constant(0x6ED9EBA1, 32),
+        bt.constant(0x8F1BBCDC, 32),
+        bt.constant(0xCA62C1D6, 32),
+    ]
 
     for w in bt.blocks():
         for i in range(16, 80):
@@ -506,13 +606,6 @@ def process(bt):
         c = h[2]
         d = h[3]
         e = h[4]
-
-        kall = [
-            bt.constant(0x5A827999, 32),
-            bt.constant(0x6ED9EBA1, 32),
-            bt.constant(0x8F1BBCDC, 32),
-            bt.constant(0xCA62C1D6, 32),
-        ]
 
         for i in range(80):
             if i in range(0, 20):
@@ -544,7 +637,101 @@ def process(bt):
 
     return h
 
-def prepare(data):
+def md4(bt):
+    h = [0x67452301, 0xEFCDAB89, 0x98BADCFE, 0x10325476]
+    h = [bt.constant(x, 32) for x in h]
+
+    k = [0x5A827999, 0x6ED9EBA1]
+    k = [bt.constant(x, 32) for x in k]
+
+    abcd_idx = lambda i,j: (j-i) % 4
+
+    for w in bt.blocks(byteorder = 'little'):
+        w = list(w)
+
+        h0 = h[0]
+        h1 = h[1]
+        h2 = h[2]
+        h3 = h[3]
+
+        ki = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
+        s = [3,7,11,19] * 4
+        for i in range(16):
+            a,b,c,d = (h[abcd_idx(i,j)] for j in range(4))
+            tmp = bt.bitsum32(a, bt.bitwise_if(b,c,d), w[ki[i]])
+            h[abcd_idx(i,0)] = bt.leftrotate(tmp, s[i])
+
+        ki = [0, 4, 8, 12, 1, 5, 9, 13, 2, 6, 10, 14, 3, 7, 11, 15]
+        s = [3,5,9,13] * 4
+        for i in range(16):
+            a,b,c,d = (h[abcd_idx(i,j)] for j in range(4))
+            tmp = bt.bitsum32(a, bt.bitwise_mayority(b,c,d), w[ki[i]], k[0])
+            h[abcd_idx(i,0)] = bt.leftrotate(tmp, s[i])
+
+        ki = [0, 8, 4, 12, 2, 10, 6, 14, 1, 9, 5, 13, 3, 11, 7, 15]
+        s = [3,9,11,15] * 4
+        for i in range(16):
+            a,b,c,d = (h[abcd_idx(i,j)] for j in range(4))
+            tmp = bt.bitsum32(a, bt.bitwise_xor(b,c,d), w[ki[i]], k[1])
+            h[abcd_idx(i,0)] = bt.leftrotate(tmp, s[i])
+
+        h[0] = bt.bitsum32(h[0], h0)
+        h[1] = bt.bitsum32(h[1], h1)
+        h[2] = bt.bitsum32(h[2], h2)
+        h[3] = bt.bitsum32(h[3], h3)
+
+    return h
+
+def md5(bt):
+    h = [0x67452301, 0xEFCDAB89, 0x98BADCFE, 0x10325476]
+    h = [bt.constant(x, 32) for x in h]
+
+    k = [int(abs(math.sin(i+1)) * 2**32) & 0xFFFFFFFF for i in range(64)]
+    k = [bt.constant(x, 32) for x in k]
+
+    s = [7, 12, 17, 22, 7, 12, 17, 22, 7, 12, 17, 22, 7, 12, 17, 22,
+         5,  9, 14, 20, 5,  9, 14, 20, 5,  9, 14, 20, 5,  9, 14, 20,
+         4, 11, 16, 23, 4, 11, 16, 23, 4, 11, 16, 23, 4, 11, 16, 23,
+         6, 10, 15, 21, 6, 10, 15, 21, 6, 10, 15, 21, 6, 10, 15, 21]
+
+    f = [ lambda b, c, d: bt.bitwise_if(b,c,d),
+          lambda b, c, d: bt.bitwise_if(d,b,c),
+          lambda b, c, d: bt.bitwise_xor(b,c,d),
+          lambda b, c, d: bt.bitwise_md5_i(b,c,d) ]
+
+    ki = [i for i in range(16)] + \
+         [(5*i + 1)%16 for i in range(16)] + \
+         [(3*i + 5)%16 for i in range(16)] + \
+         [(7*i)%16 for i in range(16)]
+
+    abcd_idx = lambda i,j: (j-i) % 4
+
+    for w in bt.blocks(byteorder = 'little'):
+        w = list(w)
+
+        h0 = h[0]
+        h1 = h[1]
+        h2 = h[2]
+        h3 = h[3]
+
+        e = 0
+        for r in range(4):
+            for i in range(16):
+                a,b,c,d = (h[abcd_idx(i,j)] for j in range(4))
+                tmp = bt.bitsum32(a, f[r](b,c,d), w[ki[e]], k[e])
+                tmp = bt.leftrotate(tmp, s[e])
+                h[abcd_idx(i,0)] = bt.bitsum32(tmp, b)
+                e += 1
+
+        h[0] = bt.bitsum32(h[0], h0)
+        h[1] = bt.bitsum32(h[1], h1)
+        h[2] = bt.bitsum32(h[2], h2)
+        h[3] = bt.bitsum32(h[3], h3)
+
+    return h
+
+
+def prepare(data, byteorder = 'big'):
     message_length = len(data) * 8
 
     data.append(0x80)
@@ -554,28 +741,26 @@ def prepare(data):
     to_add = (bytes_per_block - used_bytes) % bytes_per_block
 
     data.extend([0] * to_add)
-    data.extend(message_length.to_bytes(8, byteorder='big'))
+    data.extend(message_length.to_bytes(8, byteorder = byteorder))
     assert(len(data) % bytes_per_block == 0)
 
     return data
 
-def join(h):
+def join(h, byteorder = 'big'):
     result = 0
-    result = result << 32 | h[0]
-    result = result << 32 | h[1]
-    result = result << 32 | h[2]
-    result = result << 32 | h[3]
-    result = result << 32 | h[4]
+    for x in h:
+        for byte in x.to_bytes(32 // 8, byteorder = byteorder):
+            result = result << 8 | byte
     return result
 
-def readSolution(solutionFile):
+def readSolutionOpb(solutionFile):
     values = dict()
     for line in solutionFile:
         words = line.strip().split(" ")
         if words[0] == "v":
             for i, lit in enumerate(words[1:]):
                 value = True
-                if lit[0] == "-":
+                if lit[0] == "-" or lit[0] == "~":
                     value = False
                     var = lit[1:]
                 else:
@@ -598,12 +783,50 @@ def readSolutionCnf(solutionFile):
                 values[str(abs(lit))] = (True if lit > 0 else False)
     return values
 
+def renderSolution(bt, solution, outputPreImage):
+    inBits  = bt.getInBits()
+    outs = process(bt)
+
+    indata = 0
+    for bit in inBits:
+        indata <<= 1
+        indata |= solution[bit]
+
+    nBits = len(inBits)
+    message_length = indata % (2**64)
+    assert(message_length % 8 == 0)
+    inbytes = (indata >> (nBits - message_length)).to_bytes(message_length // 8, byteorder = 'big')
+
+    if outputPreImage:
+        outputPreImage.write(inbytes)
+
+    outBits = list()
+    for o in outs:
+        outBits.extend(o)
+
+    result = 0
+    nZero = 0
+    isZero = True
+    for bit in outBits:
+        result <<= 1
+        result |= solution[bit]
+        if isZero and not solution[bit]:
+            nZero += 1
+        else:
+            isZero = False
+
+    print("leading zeros:", nZero)
+    print("pb hash value:")
+    print("%040x" % (result))
 
 def main():
 
     parser = argparse.ArgumentParser()
 
+    parser.add_argument("hash_function", choices = ["sha1","sha256","md4","md5"])
+
     parser.add_argument("--format", "-f", choices=["cnf", "opb"], default="opb")
+    parser.add_argument("--seed", type=int)
 
     subparsers = parser.add_subparsers(dest='what')
     solutionParser = subparsers.add_parser("solution")
@@ -616,28 +839,54 @@ def main():
     solveParser = subparsers.add_parser("solve")
     solveParser.add_argument("outputFormula", type=argparse.FileType("wt"))
     solveParser.add_argument("fileToHash", type=argparse.FileType("rb"), nargs = "?")
-    solveParser.add_argument("--messageBitLength", type=int, default=55*8)
+    solveParser.add_argument("--messageBytes", type=int, default=55)
     solveParser.add_argument("--fixedInBits", type=int)
     solveParser.add_argument("--fixedInBitsStart", type=int)
+
+    solveParser = subparsers.add_parser("analyze")
+    solveParser.add_argument("outputFormula", type=argparse.FileType("wt"))
+    solveParser.add_argument("fileToHash", type=argparse.FileType("rb"), nargs = "?")
+    solveParser.add_argument("--messageBytes", type=int, default=55)
 
     computeParser = subparsers.add_parser("compute")
     computeParser.add_argument("fileToHash", type=argparse.FileType("rb"))
 
     args = parser.parse_args()
 
+    if args.seed:
+        random.seed(args.seed)
+    random.seed(1)
+
+    if args.hash_function == "sha1":
+        process = sha1
+        byteorder = 'big'
+    elif args.hash_function == "sha256":
+        process = sha256
+        byteorder = 'big'
+    elif args.hash_function == "md4":
+        process = md4
+        byteorder = 'little'
+    elif args.hash_function == "md5":
+        process = md5
+        byteorder = 'little'
 
     if args.what == "compute":
         data = bytearray(args.fileToHash.read())
+        data = prepare(data, byteorder)
         bt = TrueBits(data)
         h = process(bt)
-        result = join(h)
+        result = join(h, byteorder)
         print(hex(result))
 
     if args.what == "solve":
-        # 55 is maximum for one chunk
-        msg_bytes = 54
-        rnd = random.getrandbits(msg_bytes * 8)
-        data = bytearray(rnd.to_bytes(msg_bytes, byteorder = 'big'))
+        if args.fileToHash:
+            data = bytearray(args.fileToHash.read())
+            msg_bytes = len(data)
+        else:
+            # 55 is maximum for one chunk
+            msg_bytes = args.messageBytes
+            rnd = random.getrandbits(msg_bytes * 8)
+            data = bytearray(rnd.to_bytes(msg_bytes, byteorder = 'big'))
 
         data = prepare(data)
         assert(len(data) * 8 % 512 == 0)
@@ -645,7 +894,6 @@ def main():
         num_chunks = len(data) * 8 // 512
         print("number of chunks:", num_chunks)
 
-        formula = None
         if args.format == "cnf":
             formula = CNFFormula(args.outputFormula)
             bt = CNFBits(formula, num_chunks)
@@ -660,14 +908,16 @@ def main():
             outBits.extend(o)
 
         allBits = len(data) * 8
+        # forcedBits at the end of the message contain padding and the
+        # length of the message
         forcedBits = allBits - msg_bytes * 8
-        freeBits = allBits - forcedBits
+        # maximum number of free bits
+        maxFreeBits = allBits - forcedBits
+        # actual number of free bits
         freeBits = 10
         bits = allBits - freeBits
         assert(bits >= forcedBits)
 
-        # let us also reduce the fredom to make it easier?
-        # bits += 512 - bits
         bt.setVars(int.from_bytes(data, byteorder = 'big'), inBits[-bits:])
 
         outZeroBits = 4
@@ -675,12 +925,64 @@ def main():
 
         formula.writeHeader()
 
+    if args.what == "analyze":
+        if args.fileToHash:
+            data = bytearray(args.fileToHash.read())
+            msg_bytes = len(data)
+        else:
+            # 55 is maximum for one chunk
+            msg_bytes = args.messageBytes
+            rnd = random.getrandbits(msg_bytes * 8)
+            data = bytearray(rnd.to_bytes(msg_bytes, byteorder = 'big'))
+
+        data = prepare(data)
+        assert(len(data) * 8 % 512 == 0)
+
+        num_chunks = len(data) * 8 // 512
+        print("number of chunks:", num_chunks)
+
+        if args.format == "cnf":
+            formula = CNFFormula(args.outputFormula)
+            bt1 = CNFBits(formula, num_chunks)
+            bt2 = CNFBits(formula, num_chunks)
+        elif args.format == "opb":
+            formula = OPBFormula(args.outputFormula)
+            bt1 = PBBits(formula, num_chunks)
+            bt2 = PBBits(formula, num_chunks)
+
+        inBits1  = bt1.getInBits()
+        outs = process(bt1)
+        outBits1 = list()
+        for o in outs:
+            outBits1.extend(o)
+
+        inBits2  = bt2.getInBits()
+        outs = process(bt2)
+        outBits2 = list()
+        for o in outs:
+            outBits2.extend(o)
+
+        inBitsDiff  = bt1.bitwise_xor(inBits1, inBits2)
+        outBitsDiff = bt1.bitwise_xor(outBits1, outBits2)
+
+
+        freeInBits  = 2
+        diffOutBits = 1
+        bt1.setVars(int.from_bytes(data, byteorder = 'big'), inBits1[freeInBits:])
+        for diffBit in inBitsDiff[freeInBits:]:
+            formula.print("1 ~%s >= 1 ;"%(diffBit))
+
+        for diffBit in outBitsDiff[:diffOutBits]:
+            formula.print("1 %s >= 1 ;"%(diffBit))
+
+
+        formula.writeHeader()
 
     if args.what == "solution":
         if args.format == "cnf":
             solution = readSolutionCnf(args.solutionFile)
         elif args.format == "opb":
-            solution = readSolution(args.solutionFile)
+            solution = readSolutionOpb(args.solutionFile)
 
         num_chunks = 1
         print("number of chunks:", num_chunks)
@@ -690,40 +992,8 @@ def main():
         elif args.format == "opb":
             bt = PBBits(OPBFormula(None), num_chunks)
 
-        inBits  = bt.getInBits()
-        outs = process(bt)
 
-        indata = 0
-        for bit in inBits:
-            indata <<= 1
-            indata |= solution[bit]
-
-        nBits = len(inBits)
-        message_length = indata % (2**64)
-        assert(message_length % 8 == 0)
-        inbytes = (indata >> (nBits - message_length)).to_bytes(message_length // 8, byteorder = 'big')
-
-        if args.outputPreImage:
-            args.outputPreImage.write(inbytes)
-
-        outBits = list()
-        for o in outs:
-            outBits.extend(o)
-
-        result = 0
-        nZero = 0
-        isZero = True
-        for bit in outBits:
-            result <<= 1
-            result |= solution[bit]
-            if isZero and not solution[bit]:
-                nZero += 1
-            else:
-                isZero = False
-
-        print("leading zeros:", nZero)
-        print("pb hash value:")
-        print("%040x" % (result))
+        renderSolution(bt, solution, args.outputPreImage)
 
 
 
