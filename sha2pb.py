@@ -71,6 +71,9 @@ class TrueBits(object):
     def constant(self, value, nBits):
         return value
 
+    def toLittleEnd(self, value, nbytes = 4):
+        return int.from_bytes(value.to_bytes(nbytes, 'little'), 'big')
+
 class Formula(object):
     def __init__(self, outputFile):
         self.outputFile = outputFile
@@ -353,7 +356,14 @@ class PBBits(object):
             self.inputVars = self.newVars(512 * self.num_chunks)
         return self.inputVars
 
-    def blocks(self):
+    def toLittleEnd(self, value, nbytes = 4):
+        assert(len(value) == nbytes * 8)
+        littleEndian = []
+        for i in range(nbytes):
+            littleEndian.extend([value[j-(i+1)*8] for j in range(8)])
+        return littleEndian
+
+    def blocks(self, byteorder = 'big'):
         bits = self.getInBits()
         self.data = iter(bits)
 
@@ -361,9 +371,14 @@ class PBBits(object):
             w = []
             for i in range(16):
                 try:
-                    w.append([next(self.data) for i in range(32)])
+                    nextInt32 = [next(self.data) for i in range(32)]
                 except StopIteration:
                     return
+
+                if byteorder == 'little':
+                    nextInt32 = self.toLittleEnd(nextInt32)
+                w.append(nextInt32)
+
             yield w
 
     def leftrotate(self, n, value):
@@ -680,6 +695,9 @@ def md4(bt):
         h[2] = bt.bitsum32(h[2], h2)
         h[3] = bt.bitsum32(h[3], h3)
 
+    for i in range(4):
+        h[i] = bt.toLittleEnd(h[i])
+
     return h
 
 def md5(bt):
@@ -728,30 +746,11 @@ def md5(bt):
         h[2] = bt.bitsum32(h[2], h2)
         h[3] = bt.bitsum32(h[3], h3)
 
+    for i in range(4):
+        h[i] = bt.toLittleEnd(h[i])
+
     return h
 
-
-def prepare(data, byteorder = 'big'):
-    message_length = len(data) * 8
-
-    data.append(0x80)
-
-    bytes_per_block = (512 // 8)
-    used_bytes = message_length//8 + 1 + 8
-    to_add = (bytes_per_block - used_bytes) % bytes_per_block
-
-    data.extend([0] * to_add)
-    data.extend(message_length.to_bytes(8, byteorder = byteorder))
-    assert(len(data) % bytes_per_block == 0)
-
-    return data
-
-def join(h, byteorder = 'big'):
-    result = 0
-    for x in h:
-        for byte in x.to_bytes(32 // 8, byteorder = byteorder):
-            result = result << 8 | byte
-    return result
 
 def readSolutionOpb(solutionFile):
     values = dict()
@@ -783,41 +782,78 @@ def readSolutionCnf(solutionFile):
                 values[str(abs(lit))] = (True if lit > 0 else False)
     return values
 
-def renderSolution(bt, solution, outputPreImage):
-    inBits  = bt.getInBits()
-    outs = process(bt)
+class HashHandler:
+    def __init__(self, hash_function, byteorder = 'big'):
+        self.byteorder = byteorder
+        self.hash_function = hash_function
 
-    indata = 0
-    for bit in inBits:
-        indata <<= 1
-        indata |= solution[bit]
+    def __call__(self, bt):
+        return self.hash_function(bt)
 
-    nBits = len(inBits)
-    message_length = indata % (2**64)
-    assert(message_length % 8 == 0)
-    inbytes = (indata >> (nBits - message_length)).to_bytes(message_length // 8, byteorder = 'big')
+    def prepare(self, data):
+        message_length = len(data) * 8
 
-    if outputPreImage:
-        outputPreImage.write(inbytes)
+        data.append(0x80)
 
-    outBits = list()
-    for o in outs:
-        outBits.extend(o)
+        bytes_per_block = (512 // 8)
+        used_bytes = message_length//8 + 1 + 8
+        to_add = (bytes_per_block - used_bytes) % bytes_per_block
 
-    result = 0
-    nZero = 0
-    isZero = True
-    for bit in outBits:
-        result <<= 1
-        result |= solution[bit]
-        if isZero and not solution[bit]:
-            nZero += 1
-        else:
-            isZero = False
+        data.extend([0] * to_add)
+        data.extend(message_length.to_bytes(8, byteorder = self.byteorder))
+        assert(len(data) % bytes_per_block == 0)
 
-    print("leading zeros:", nZero)
-    print("pb hash value:")
-    print("%040x" % (result))
+        return data
+
+    def join(self, h):
+        result = 0
+        for x in h:
+            for byte in x.to_bytes(32 // 8, byteorder = 'big'):
+                result = result << 8 | byte
+        return result
+
+    def renderSolution(self, bt, solution, outputPreImage):
+        inBits  = bt.getInBits()
+        outs = self.hash_function(bt)
+
+        indata = 0
+        for bit in inBits:
+            indata <<= 1
+            indata |= solution[bit]
+
+
+        nBits = len(inBits)
+        inbytes = indata.to_bytes(nBits // 8, byteorder = 'big')
+        print(inbytes)
+        message_length = int.from_bytes(inbytes[-8:], byteorder = self.byteorder)
+        print("ml", message_length)
+
+        if outputPreImage:
+            outputPreImage.write(inbytes[:message_length // 8])
+
+        outBits = list()
+        for o in outs:
+            outBits.extend(o)
+
+        result = 0
+        nZero = 0
+        isZero = True
+        for bit in outBits:
+            result <<= 1
+            result |= solution[bit]
+            if isZero and not solution[bit]:
+                nZero += 1
+            else:
+                isZero = False
+
+        print("leading zeros:", nZero)
+        print("solver hash value:")
+        print(myhex(result, len(outBits)))
+
+def myhex(value, bits):
+    hexdigits = bits // 4
+    frmt = "%0{0:d}x".format(hexdigits)
+    return (frmt % (value))
 
 def main():
 
@@ -857,26 +893,21 @@ def main():
         random.seed(args.seed)
     random.seed(1)
 
-    if args.hash_function == "sha1":
-        process = sha1
-        byteorder = 'big'
-    elif args.hash_function == "sha256":
-        process = sha256
-        byteorder = 'big'
-    elif args.hash_function == "md4":
-        process = md4
-        byteorder = 'little'
-    elif args.hash_function == "md5":
-        process = md5
-        byteorder = 'little'
+    algs = {
+        "sha1": (sha1, 'big'),
+        "sha256": (sha256, 'big'),
+        "md4": (md4, 'little'),
+        "md5": (md5, 'little')
+    }
+    hashing = HashHandler(*algs[args.hash_function])
 
     if args.what == "compute":
         data = bytearray(args.fileToHash.read())
-        data = prepare(data, byteorder)
+        data = hashing.prepare(data)
         bt = TrueBits(data)
-        h = process(bt)
-        result = join(h, byteorder)
-        print(hex(result))
+        h = hashing(bt)
+        result = hashing.join(h)
+        print(myhex(result, len(h) * 32))
 
     if args.what == "solve":
         if args.fileToHash:
@@ -888,7 +919,7 @@ def main():
             rnd = random.getrandbits(msg_bytes * 8)
             data = bytearray(rnd.to_bytes(msg_bytes, byteorder = 'big'))
 
-        data = prepare(data)
+        data = hashing.prepare(data)
         assert(len(data) * 8 % 512 == 0)
 
         num_chunks = len(data) * 8 // 512
@@ -902,7 +933,7 @@ def main():
             bt = PBBits(formula, num_chunks)
 
         inBits  = bt.getInBits()
-        outs = process(bt)
+        outs = hashing(bt)
         outBits = list()
         for o in outs:
             outBits.extend(o)
@@ -935,7 +966,7 @@ def main():
             rnd = random.getrandbits(msg_bytes * 8)
             data = bytearray(rnd.to_bytes(msg_bytes, byteorder = 'big'))
 
-        data = prepare(data)
+        data = hashing.prepare(data)
         assert(len(data) * 8 % 512 == 0)
 
         num_chunks = len(data) * 8 // 512
@@ -951,13 +982,13 @@ def main():
             bt2 = PBBits(formula, num_chunks)
 
         inBits1  = bt1.getInBits()
-        outs = process(bt1)
+        outs = hashing(bt1)
         outBits1 = list()
         for o in outs:
             outBits1.extend(o)
 
         inBits2  = bt2.getInBits()
-        outs = process(bt2)
+        outs = hashing(bt2)
         outBits2 = list()
         for o in outs:
             outBits2.extend(o)
@@ -993,7 +1024,7 @@ def main():
             bt = PBBits(OPBFormula(None), num_chunks)
 
 
-        renderSolution(bt, solution, args.outputPreImage)
+        hashing.renderSolution(bt, solution, args.outputPreImage)
 
 
 
