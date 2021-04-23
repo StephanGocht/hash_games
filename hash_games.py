@@ -1027,27 +1027,37 @@ def main():
     parser.add_argument('--dumpSettings', action='store_true', help="Dump settings as dictionary and exit.")
 
     subparsers = parser.add_subparsers(dest='what')
-    solutionParser = subparsers.add_parser("solution")
+    solutionParser = subparsers.add_parser("solution",
+        help="read in a solution file and generate input file and hash from it.")
     solutionParser.add_argument("solutionFile", type=argparse.FileType("rt"),
-        default = "sol.txt")
+        default = "sol.txt",
+        help = "File to read the solution from.")
     solutionParser.add_argument("outputPreImage", type=argparse.FileType("wb"),
         default = "result_file.txt",
-        nargs = "?")
+        nargs = "?",
+        help = "File to write the hashed message to.")
 
-    solveParser = subparsers.add_parser("solve")
+    solveParser = subparsers.add_parser("mining",
+        help="Generate a problem motivated by crypto mining with fixed number of leading output zeros.")
     solveParser.add_argument("outputFormula", type=argparse.FileType("wt"))
-    solveParser.add_argument("fileToHash", type=argparse.FileType("rb"), nargs = "?")
-    solveParser.add_argument("--messageBytes", type=int, default=55)
-    solveParser.add_argument("--nZeroOutBits", type=int, default=8)
-    solveParser.add_argument("--nFreeInBits", type=int, default=10)
+    solveParser.add_argument("fileToHash", type=argparse.FileType("rb"), nargs = "?",
+        help="File to use as base input, if no file is given a random input will be generated.")
+    solveParser.add_argument("--messageBytes", type=int, default=55,
+        help="Length of the message, if generated automatically.")
+    solveParser.add_argument("--nZeroOutBits", type=int, default=8,
+        help="Number of leading zero bits in the output.")
+    solveParser.add_argument("--nFreeInBits", type=int, default=10,
+        help="Number of bits in the input that can be freely choosen by the solver.")
 
-    solveParser = subparsers.add_parser("analyze")
-    solveParser.add_argument("outputFormula", type=argparse.FileType("wt"))
-    solveParser.add_argument("fileToHash", type=argparse.FileType("rb"), nargs = "?")
-    solveParser.add_argument("--messageBytes", type=int, default=55)
+    # solveParser = subparsers.add_parser("analyze")
+    # solveParser.add_argument("outputFormula", type=argparse.FileType("wt"))
+    # solveParser.add_argument("fileToHash", type=argparse.FileType("rb"), nargs = "?")
+    # solveParser.add_argument("--messageBytes", type=int, default=55)
 
-    computeParser = subparsers.add_parser("compute")
-    computeParser.add_argument("fileToHash", type=argparse.FileType("rb"))
+    computeParser = subparsers.add_parser("compute",
+        help="Compute the hash for the given file.")
+    computeParser.add_argument("fileToHash", type=argparse.FileType("rb"),
+        help="File that should be hashed.")
 
     args = parser.parse_args()
 
