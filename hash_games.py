@@ -900,7 +900,7 @@ def run(args):
         result = hashing.join(h)
         print(myhex(result, len(h) * 32))
 
-    if args["what"] == "solve":
+    elif args["what"] == "mining":
         if args["fileToHash"]:
             data = bytearray(args["fileToHash"].read())
             msg_bytes = len(data)
@@ -947,7 +947,7 @@ def run(args):
 
         formula.writeHeader()
 
-    if args["what"] == "analyze":
+    elif args["what"] == "analyze":
         if args["fileToHash"]:
             data = bytearray(args["fileToHash"].read())
             msg_bytes = len(data)
@@ -1000,7 +1000,7 @@ def run(args):
 
         formula.writeHeader()
 
-    if args["what"] == "solution":
+    elif args["what"] == "solution":
         if args["format"] == "cnf":
             solution = readSolutionCnf(args["solutionFile"])
         elif args["format"] == "opb":
@@ -1016,6 +1016,9 @@ def run(args):
 
 
         hashing.renderSolution(bt, solution, args["outputPreImage"])
+
+    else:
+        print("Error: Unknown mode of operation '" + str(args["what"]) + "'")
 
 def main():
     parser = argparse.ArgumentParser()
