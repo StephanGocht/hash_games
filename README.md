@@ -31,3 +31,5 @@ and collision attacks on SHA-1”. In: Proceedings of SAT Competition
 https://github.com/vegard/sha1-sat
 
 and the data files were generated with its halfadder generator (mkhalfadder.cc) and espresso ( https://github.com/classabbyamp/espresso-logic.git ).
+
+This work was done while the author was participating in a program at the Simons Institute for the Theory of Computing.
