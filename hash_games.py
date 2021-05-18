@@ -18,6 +18,12 @@ def nextInt32(it, byteorder):
         result.append(next(it))
     return int.from_bytes(result, byteorder=byteorder)
 
+def intToBits(value, nBits):
+    mask = 1 << nBits
+    for i in range(nBits):
+        mask >>= 1
+        yield bool(value & mask)
+
 class TrueBits(object):
     def __init__(self, data):
         self.data = iter(data)
@@ -201,6 +207,12 @@ class CNFBits(VarBits):
     def print(self, *args, **kwargs):
         self.formula.print(*args,**kwargs)
 
+    def printClauses(self, clauses):
+        for clause in clauses:
+            for sign, var in clause:
+                self.print("%s%s "%("-" if not sign else "", var), end = "")
+            self.print("0")
+
     def bitwise_if(self, b, c, d):
         # (b & c) | ((~b) & d)
         assert(len(b) == len(c) and len(c) == len(d))
@@ -225,10 +237,7 @@ class CNFBits(VarBits):
                 [(1,f), (1,x), (0,z)],
                 [(1,f), (0,y), (0,z)]
             ]
-            for clause in clauses:
-                for sign, var in clause:
-                    self.print("%s%s "%("-" if not sign else "", var), end = "")
-                self.print("0")
+            self.printClauses(clauses)
 
         return res
 
@@ -332,10 +341,7 @@ class CNFBits(VarBits):
                 [(1,f), (0,x), (0,z)],
                 [(1,f), (0,y), (0,z)],
             ]
-            for clause in clauses:
-                for sign, var in clause:
-                    self.print("%s%s "%("-" if not sign else "", var), end = "")
-                self.print("0")
+            self.printClauses(clauses)
 
         return result
 
@@ -355,10 +361,7 @@ class CNFBits(VarBits):
                 [(0,f), (0,x), (0,y), (1,z)],
                 [(0,f), (0,x), (0,y), (0,z)],
             ]
-            for clause in clauses:
-                for sign, var in clause:
-                    self.print("%s%s "%("-" if not sign else "", var), end = "")
-                self.print("0")
+            self.printClauses(clauses)
 
         return res
 
@@ -366,6 +369,45 @@ class CNFBits(VarBits):
         result = self.newVars(nBits)
         self.setVars(value, result)
         return result
+
+    def encodeLessEqual(self, bits, value):
+        """
+            @arg bits in big endian (large bits first)
+        """
+
+        allT = self.newVars(len(bits))
+
+        lastT = None
+        for newT, bit, val in zip(allT, bits, intToBits(value, len(bits))):
+            clauses = []
+            # t_i -> x_i < b_i or t_{i + 1}
+            clause = [(0,newT)]
+            if val == 1:
+                clause.append((0,bit))
+            if lastT is not None:
+                clause.append((1,lastT))
+
+            clauses.append(clause)
+
+            # t_i <- x_i < b_i or t_{i + 1}
+            # t_i or (x_i >= b_i and not t_{i + 1})
+            # t_i or x_i >= b_i and t_i or not t_{i + 1})
+
+            if val == 1:
+                clause = [(1, newT), (1, bit)]
+                clauses.append(clause)
+
+            if lastT is not None:
+                clause = [(1, newT), (0, lastT)]
+                clauses.append(clause)
+
+            if val == 0:
+                # t_i or x_i <= b_i
+                clause = [(1, newT), (0, bit)]
+                clauses.append(clause)
+
+            self.printClauses(clauses)
+            lastT = newT
 
     def setVars(self, value, variables):
         nBits = len(variables)
@@ -541,6 +583,12 @@ class PBBits(VarBits):
         result = self.newVars(nBits)
         self.setVars(value, result)
         return result
+
+    def encodeLessEqual(self, bits, value):
+        for bit, coeffPow in zip(bits, reversed(range(len(bits)))):
+            self.print("%i %s "%(-2**coeffPow, bit), end="")
+
+        self.print(">= %i ;"%(-value))
 
     def setVars(self, value, variables):
         nBits = len(variables)
@@ -937,13 +985,24 @@ def run(args):
         maxFreeBits = allBits - forcedBits
         # actual number of free bits
         freeBits = args["nFreeInBits"]
-        bits = allBits - freeBits
-        assert(bits >= forcedBits)
+        setBits = allBits - freeBits
+        assert(setBits >= forcedBits)
 
-        bt.setVars(int.from_bytes(data, byteorder = 'big'), inBits[-bits:])
+        bt.setVars(int.from_bytes(data, byteorder = 'big'), inBits[-setBits:])
 
         outZeroBits = args["nZeroOutBits"]
-        bt.setVars(0, outBits[:outZeroBits])
+        if outZeroBits is not None:
+            bt.setVars(0, outBits[:outZeroBits])
+        else:
+            threshold = args["threshold"]
+            if threshold is None:
+                p = args["satProbability"]
+                unsatFraction = (1 - p) ** (1 / (2 ** freeBits))
+                threshold = round( (1 - unsatFraction) * 2 ** len(outBits) )
+                pSat = 1 - (1 - threshold / (2 ** len(outBits))) ** (2 ** freeBits)
+                assert( abs( pSat - p ) <= 0.01  )
+
+            bt.encodeLessEqual(outBits, threshold)
 
         formula.writeHeader()
 
@@ -1041,16 +1100,20 @@ def main():
         help = "File to write the hashed message to.")
 
     solveParser = subparsers.add_parser("mining",
-        help="Generate a problem motivated by crypto mining with fixed number of leading output zeros.")
+        help="Generate a problem motivated by crypto mining with fixed number of leading output zeros / threshold.")
     solveParser.add_argument("outputFormula", type=argparse.FileType("wt"))
     solveParser.add_argument("fileToHash", type=argparse.FileType("rb"), nargs = "?",
         help="File to use as base input, if no file is given a random input will be generated.")
     solveParser.add_argument("--messageBytes", type=int, default=55,
         help="Length of the message, if generated automatically.")
-    solveParser.add_argument("--nZeroOutBits", type=int, default=8,
+    solveParser.add_argument("--nZeroOutBits", type=int, default=None,
         help="Number of leading zero bits in the output.")
-    solveParser.add_argument("--nFreeInBits", type=int, default=10,
+    solveParser.add_argument("--nFreeInBits", type=int, default=4,
         help="Number of bits in the input that can be freely choosen by the solver.")
+    solveParser.add_argument("--threshold", type=int, default=None,
+        help="Threshold value on the resulting message digest.")
+    solveParser.add_argument("--satProbability", type=float, default=0.5,
+        help="Probability of instance being satisfiable.")
 
     # solveParser = subparsers.add_parser("analyze")
     # solveParser.add_argument("outputFormula", type=argparse.FileType("wt"))
